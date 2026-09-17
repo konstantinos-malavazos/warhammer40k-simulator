@@ -25,3 +25,6 @@ env/
 
 # Claude Code local state (keep .claude/agents and .claude/skills tracked)
 .claude/settings.local.json
+
+# Claude Code agent memory (machine-local, not shared)
+.claude/agent-memory-local/
