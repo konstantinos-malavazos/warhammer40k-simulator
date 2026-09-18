@@ -33,7 +33,7 @@ from wh40k_tutorial.core.scenario import (
     load_scenario_by_id,
     opposing_side,
 )
-from wh40k_tutorial.engine import BattleState, EngineError, VolleyEvent, run_scenario
+from wh40k_tutorial.engine import BattleState, EngineError, MoveEvent, VolleyEvent, run_scenario
 from wh40k_tutorial.narrator import StepNarration, narrate_volley
 from wh40k_tutorial.strategies.base import Strategy
 from wh40k_tutorial.strategies.heuristic import HeuristicStrategy
@@ -84,8 +84,9 @@ def list_scenarios() -> None:
     except ScenarioDataError as exc:
         raise click.ClickException(str(exc)) from exc
     for scenario in scenarios:
-        click.echo(f"{scenario.scenario_id}  —  {scenario.title} "
-                   f"(teaches {scenario.teaches.rstrip('.')})")
+        click.echo(
+            f"{scenario.scenario_id}  —  {scenario.title} (teaches {scenario.teaches.rstrip('.')})"
+        )
 
 
 def _why_loop(narrations: list[StepNarration]) -> None:
@@ -119,8 +120,7 @@ def _why_loop(narrations: list[StepNarration]) -> None:
 
 @main.command()
 @click.argument("scenario_id")
-@click.option("--seed", type=int, default=None,
-              help="Seed the dice for a reproducible battle.")
+@click.option("--seed", type=int, default=None, help="Seed the dice for a reproducible battle.")
 def play(scenario_id: str, seed: int | None) -> None:
     """Run a tutorial scenario end to end."""
     try:
@@ -136,7 +136,7 @@ def play(scenario_id: str, seed: int | None) -> None:
         else ScriptedStrategy(scripted_actions_for(scenario, opponent))
     )
     strategies: dict[str, Strategy] = {
-        scenario.player_side: HumanStrategy(),
+        scenario.player_side: HumanStrategy(rng=random.Random(seed)),
         opponent: opponent_strategy,
     }
 
@@ -144,10 +144,13 @@ def play(scenario_id: str, seed: int | None) -> None:
     click.echo(f"This scenario teaches {scenario.teaches.rstrip('.')}.")
     click.echo(f"You play the {scenario.player_side}.\n")
     click.echo(scenario.intro + "\n")
-    console.print(render_live_shell(
-        BattleState.from_scenario(scenario).snapshot().units,
-        ("The battle is about to begin.",),
-    ), height=_SHELL_HEIGHT)
+    console.print(
+        render_live_shell(
+            BattleState.from_scenario(scenario).snapshot().units,
+            ("The battle is about to begin.",),
+        ),
+        height=_SHELL_HEIGHT,
+    )
 
     last_volley: list[str] = []
     last_narrations: list[StepNarration] = []
@@ -158,10 +161,24 @@ def play(scenario_id: str, seed: int | None) -> None:
                 f"\n— Turn {number}: fight phase — both sides fight; "
                 f"the {turn.active_side} picks first —"
             )
+        elif turn.phase == "movement":
+            click.echo(f"\n— Turn {number}: movement phase, the {turn.active_side} moves —")
         else:
             click.echo(f"\n— Turn {number}: {turn.phase} phase, the {turn.active_side} acts —")
         if turn.narrate_before:
             click.echo(turn.narrate_before + "\n")
+
+    def show_move(event: MoveEvent) -> None:
+        mt_name = event.move_type.replace("_", " ").title()
+        if event.from_pos == event.to_pos:
+            click.echo(
+                f"   ↳ {event.action.attacker_unit_id} remained stationary at {event.to_pos}."
+            )
+        else:
+            click.echo(
+                f"   ↳ {event.action.attacker_unit_id} performed a {mt_name} move "
+                f"from {event.from_pos} to {event.to_pos}."
+            )
 
     def show_volley(event: VolleyEvent) -> None:
         last_volley[:] = volley_report_lines(event.result, turn=event.turn)
@@ -181,6 +198,7 @@ def play(scenario_id: str, seed: int | None) -> None:
             rng=random.Random(seed),
             on_turn_start=announce_turn,
             on_volley=show_volley,
+            on_move=show_move,
         )
     except (EngineError, ScriptExhaustedError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -188,17 +206,23 @@ def play(scenario_id: str, seed: int | None) -> None:
     if last_narrations:
         rules_heading = "The rules behind that volley"
         rules_body = "\n\n".join(f"{n.step.upper()}: {n.inline}" for n in last_narrations)
-        console.print(render_live_shell(
-            final.snapshot().units,
-            last_volley,
-            rules_heading=rules_heading,
-            rules_body=rules_body,
-        ), height=_FINAL_SHELL_HEIGHT)
+        console.print(
+            render_live_shell(
+                final.snapshot().units,
+                last_volley,
+                rules_heading=rules_heading,
+                rules_body=rules_body,
+            ),
+            height=_FINAL_SHELL_HEIGHT,
+        )
     else:
-        console.print(render_live_shell(
-            final.snapshot().units,
-            ("No shots were fired.",),
-        ), height=_SHELL_HEIGHT)
+        console.print(
+            render_live_shell(
+                final.snapshot().units,
+                ("No shots were fired.",),
+            ),
+            height=_SHELL_HEIGHT,
+        )
     for side in SIDES:
         if final.side_wiped(side):
             click.echo(f"The {side}'s force has been wiped out.")

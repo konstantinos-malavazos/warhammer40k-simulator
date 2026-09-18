@@ -34,7 +34,8 @@ SIDES = ("attacker", "defender")
 
 # The phases a scenario turn may declare. Shooting arrived with v1; the
 # fight phase is the first v2 mechanic (see docs/design/fight-phase.md).
-_SUPPORTED_PHASES = ("shooting", "fight")
+_SUPPORTED_PHASES = ("shooting", "fight", "movement")
+_VALID_MOVE_TYPES = ("remain_stationary", "normal", "advance", "fall_back")
 
 # The grid's scale (ADR 0007): one square is 2 inches, and the distance
 # between two squares is the Chebyshev distance — the number of king's moves —
@@ -85,9 +86,7 @@ def in_engagement_range(a: tuple[int, int], b: tuple[int, int]) -> bool:
     return chebyshev_squares(a, b) <= ENGAGEMENT_RANGE_SQUARES
 
 
-def in_weapon_range(
-    a: tuple[int, int], b: tuple[int, int], weapon: Weapon
-) -> bool:
+def in_weapon_range(a: tuple[int, int], b: tuple[int, int], weapon: Weapon) -> bool:
     """True when a model at ``a`` can reach a target at ``b`` with ``weapon``.
 
     04.02: a shooting target must be within range of the weapon. The single
@@ -95,6 +94,50 @@ def in_weapon_range(
     shot validation, and the strategies' target menus all defer here.
     """
     return chebyshev_squares(a, b) <= reach_squares(weapon.range)
+
+
+def legal_destinations(
+    pos: tuple[int, int],
+    move_type: str,
+    movement_inches: int,
+    *,
+    advance_roll: int = 0,
+    occupied: set[tuple[int, int]],
+    enemy_positions: set[tuple[int, int]],
+    width: int = BATTLEFIELD_WIDTH,
+    height: int = BATTLEFIELD_HEIGHT,
+) -> tuple[tuple[int, int], ...]:
+    """All legal grid squares `pos` can reach under `move_type`.
+
+    Rules 09.04-09.07:
+    - remain_stationary: only `pos` itself
+    - normal: within reach_squares(movement_inches), unoccupied, ending unengaged
+    - advance: within reach_squares(movement_inches + advance_roll), unoccupied, ending unengaged
+    - fall_back: within reach_squares(movement_inches), unoccupied, ending unengaged
+    Sorted deterministically in reading order (row, then col).
+    """
+    if move_type == "remain_stationary":
+        return (pos,)
+    if move_type not in ("normal", "advance", "fall_back"):
+        return ()
+    max_reach = (
+        reach_squares(movement_inches + advance_roll)
+        if move_type == "advance"
+        else reach_squares(movement_inches)
+    )
+    results: list[tuple[int, int]] = []
+    for r in range(height):
+        for c in range(width):
+            dest = (c, r)
+            if dest in occupied and dest != pos:
+                continue
+            if chebyshev_squares(pos, dest) > max_reach:
+                continue
+            if any(in_engagement_range(dest, e) for e in enemy_positions):
+                continue
+            results.append(dest)
+    return tuple(results)
+
 
 # Who plays the non-player side: "scripted" replays the scenario's action
 # lists; "heuristic" is the expected-damage AI (strategies/heuristic.py).
@@ -131,15 +174,18 @@ class ScenarioSide:
 
 @dataclass(frozen=True)
 class ScenarioAction:
-    """One scripted action inside a turn entry — a shot, or a fight.
+    """One scripted action inside a turn entry — a shot, a fight, or a move.
 
     This is the *data-file* shape; `strategies.scripted` converts it into the
     protocol's `Action` at runtime (core stays free of the strategies layer).
     """
 
     attacker_unit_id: str
-    weapon: str  # weapon key on the attacker's datasheet: ranged in shooting turns, melee in fights
-    target_unit_id: str
+    # Weapon key on datasheet: ranged in shooting, melee in fights
+    weapon: str = ""
+    target_unit_id: str = ""
+    move_type: str = ""  # "remain_stationary", "normal", "advance", "fall_back"
+    destination: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -295,11 +341,7 @@ def _parse_unit(
         datasheet=sheet,
         position=_parse_position(_get(raw, "position", ctx), ctx),
         models=models,
-        loadout=(
-            ()
-            if loadout_raw is None
-            else _parse_loadout_override(loadout_raw, sheet, ctx)
-        ),
+        loadout=(() if loadout_raw is None else _parse_loadout_override(loadout_raw, sheet, ctx)),
     )
 
 
@@ -350,6 +392,71 @@ def _parse_action(
 ) -> ScenarioAction:
     if not isinstance(raw, dict):
         raise ScenarioDataError(f"{ctx}: each action must be an object, got {raw!r}")
+    if phase == "movement":
+        unit_id = raw.get("unit") or raw.get("attacker")
+        if not isinstance(unit_id, str) or not unit_id:
+            raise ScenarioDataError(f"{ctx}: missing 'unit' field")
+        move_type = _str_field(raw, "move_type", ctx)
+        if move_type not in _VALID_MOVE_TYPES:
+            raise ScenarioDataError(
+                f"{ctx}: move_type {move_type!r} is not supported — "
+                f"must be one of {', '.join(_VALID_MOVE_TYPES)}"
+            )
+        acting = attacker_side if active_side == "attacker" else defender_side
+        enemies = defender_side if acting is attacker_side else attacker_side
+        mover = next((u for u in acting.units if u.unit_id == unit_id), None)
+        if mover is None:
+            raise ScenarioDataError(
+                f"{ctx}: unit {unit_id!r} is not a unit on the active ({acting.name}) side"
+            )
+        is_engaged = any(in_engagement_range(mover.position, e.position) for e in enemies.units)
+        if move_type == "remain_stationary":
+            destination = mover.position
+        else:
+            if move_type == "fall_back":
+                if not is_engaged:
+                    raise ScenarioDataError(
+                        f"{ctx}: {mover.datasheet.display_name} ({unit_id!r}) cannot Fall Back "
+                        f"because it is not engaged"
+                    )
+            elif is_engaged:
+                name = mover.datasheet.display_name
+                mt_title = move_type.replace("_", " ").title()
+                raise ScenarioDataError(
+                    f"{ctx}: {name} ({unit_id!r}) cannot make a {mt_title} "
+                    f"because it is engaged — must Fall Back or Remain Stationary"
+                )
+            dest_raw = raw.get("destination")
+            destination = _parse_position(dest_raw, f"{ctx}.destination")
+            all_units = list(attacker_side.units) + list(defender_side.units)
+            if any(u.position == destination and u.unit_id != unit_id for u in all_units):
+                raise ScenarioDataError(
+                    f"{ctx}: destination {destination} is already occupied by another unit"
+                )
+            dist = chebyshev_squares(mover.position, destination)
+            max_reach = (
+                reach_squares(mover.datasheet.profile.movement + 6)
+                if move_type == "advance"
+                else reach_squares(mover.datasheet.profile.movement)
+            )
+            if dist > max_reach:
+                raise ScenarioDataError(
+                    f"{ctx}: destination {destination} is {dist} squares from {mover.position} — "
+                    f"exceeds max reach of {max_reach} squares for movement "
+                    f'{mover.datasheet.profile.movement}"'
+                    + (' + 6" advance' if move_type == "advance" else "")
+                )
+            if any(in_engagement_range(destination, e.position) for e in enemies.units):
+                raise ScenarioDataError(
+                    f"{ctx}: {move_type} move to {destination} must end unengaged, "
+                    f"but is within engagement range of an enemy unit"
+                )
+        return ScenarioAction(
+            attacker_unit_id=unit_id,
+            move_type=move_type,
+            destination=destination,
+        )
+
     attacker_id = _str_field(raw, "attacker", ctx)
     weapon_key = _str_field(raw, "weapon", ctx)
     target_id = _str_field(raw, "target", ctx)
@@ -365,17 +472,14 @@ def _parse_action(
             None,
         )
         if acting is None:
-            raise ScenarioDataError(
-                f"{ctx}: attacker {attacker_id!r} is not a unit on either side"
-            )
+            raise ScenarioDataError(f"{ctx}: attacker {attacker_id!r} is not a unit on either side")
     else:
         acting = attacker_side if active_side == "attacker" else defender_side
     enemies = defender_side if acting is attacker_side else attacker_side
     shooter = next((u for u in acting.units if u.unit_id == attacker_id), None)
     if shooter is None:
         raise ScenarioDataError(
-            f"{ctx}: attacker {attacker_id!r} is not a unit on the active "
-            f"({acting.name}) side"
+            f"{ctx}: attacker {attacker_id!r} is not a unit on the active ({acting.name}) side"
         )
     weapon = next((w for w in shooter.datasheet.weapons if w.name == weapon_key), None)
     if weapon is None:
@@ -413,16 +517,14 @@ def _parse_action(
     # the engaged-shooting rules (10.04, 04.02) are the engine's to enforce,
     # on live positions and survivors.
     if phase != "fight" and not in_weapon_range(shooter.position, target.position, weapon):
-            raise ScenarioDataError(
-                f"{ctx}: {target.datasheet.display_name} ({target_id!r}) is "
-                f"{distance_inches(shooter.position, target.position)}\" from "
-                f"{shooter.datasheet.display_name} ({attacker_id!r}) — beyond "
-                f"{weapon.display_name}'s {weapon.range}\" range "
-                f"(1 square = {INCHES_PER_SQUARE}\", ADR 0007)"
-            )
-    return ScenarioAction(
-        attacker_unit_id=attacker_id, weapon=weapon_key, target_unit_id=target_id
-    )
+        raise ScenarioDataError(
+            f"{ctx}: {target.datasheet.display_name} ({target_id!r}) is "
+            f'{distance_inches(shooter.position, target.position)}" from '
+            f"{shooter.datasheet.display_name} ({attacker_id!r}) — beyond "
+            f"{weapon.display_name}'s {weapon.range}\" range "
+            f'(1 square = {INCHES_PER_SQUARE}", ADR 0007)'
+        )
+    return ScenarioAction(attacker_unit_id=attacker_id, weapon=weapon_key, target_unit_id=target_id)
 
 
 def _parse_turn(
@@ -473,8 +575,7 @@ def _parse_scenario(data: object, source: str) -> Scenario:
     if not isinstance(turns_raw, list) or not turns_raw:
         raise ScenarioDataError(f"{source}: 'turns' must be a non-empty list")
     turns = tuple(
-        _parse_turn(t, attacker, defender, f"{source}.turns[{i}]")
-        for i, t in enumerate(turns_raw)
+        _parse_turn(t, attacker, defender, f"{source}.turns[{i}]") for i, t in enumerate(turns_raw)
     )
     opponent_strategy = data.get("opponent_strategy", "scripted")
     if opponent_strategy not in OPPONENT_STRATEGIES:
@@ -511,8 +612,7 @@ def _parse_scenario(data: object, source: str) -> Scenario:
                 f"(within {ENGAGEMENT_RANGE_SQUARES} square, diagonals count)"
             )
         player_units = {
-            u.unit_id
-            for u in (attacker if player_side == "attacker" else defender).units
+            u.unit_id for u in (attacker if player_side == "attacker" else defender).units
         }
         for i in fight_turns:
             for a in turns[i].actions:

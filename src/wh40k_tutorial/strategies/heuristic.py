@@ -40,6 +40,7 @@ from collections.abc import Iterable
 
 from wh40k_tutorial.core.expected import expected_damage
 from wh40k_tutorial.core.models import Weapon
+from wh40k_tutorial.core.scenario import in_engagement_range, in_weapon_range
 from wh40k_tutorial.strategies.base import Action, GameState, UnitSnapshot
 
 
@@ -62,6 +63,8 @@ class HeuristicStrategy:
                 for target in state.engaged_enemies(fighter)
             )
             return self._best(candidates, kind="fight")
+        if state.phase == "movement":
+            return self._choose_move(state)
         candidates = (
             (shooter, weapon, target)
             for shooter in state.eligible_shooters()
@@ -69,6 +72,89 @@ class HeuristicStrategy:
             for target in state.shootable_targets(shooter, weapon)
         )
         return self._best(candidates, kind="shoot")
+
+    def _choose_move(self, state: GameState) -> Action:
+        movers = state.eligible_movers()
+        if not movers:
+            raise RuntimeError(
+                "no legal move available — the engine should not have asked for an action"
+            )
+        mover = movers[0]  # deterministic scenario order
+        enemies = state.surviving_enemies()
+
+        def best_shooting_damage(from_pos: tuple[int, int]) -> float:
+            best = 0.0
+            if any(in_engagement_range(from_pos, e.position) for e in enemies):
+                return 0.0
+            for w in mover.ranged_weapons:
+                for target in enemies:
+                    if not in_weapon_range(from_pos, target.position, w):
+                        continue
+                    if state.engaged_enemies(target):
+                        continue
+                    dmg = min(
+                        expected_damage(mover.models, w, target.datasheet.profile),
+                        float(_remaining_wounds(target)),
+                    )
+                    if dmg > best:
+                        best = dmg
+            return best
+
+        def incoming_damage(at_pos: tuple[int, int]) -> float:
+            total = 0.0
+            for enemy in enemies:
+                if in_engagement_range(at_pos, enemy.position):
+                    melee_best = max(
+                        (
+                            expected_damage(enemy.models, mw, mover.datasheet.profile)
+                            for mw in enemy.melee_weapons
+                        ),
+                        default=0.0,
+                    )
+                    total += melee_best
+                else:
+                    if not state.engaged_enemies(enemy):
+                        ranged_best = max(
+                            (
+                                expected_damage(enemy.models, rw, mover.datasheet.profile)
+                                for rw in enemy.ranged_weapons
+                                if in_weapon_range(enemy.position, at_pos, rw)
+                            ),
+                            default=0.0,
+                        )
+                        total += ranged_best
+            return total
+
+        def score_move(pos: tuple[int, int], move_type: str) -> float:
+            dealt = 0.0 if move_type in ("advance", "fall_back") else best_shooting_damage(pos)
+            taken = incoming_damage(pos)
+            return dealt - taken
+
+        baseline_score = score_move(mover.position, "remain_stationary")
+        best_score = baseline_score
+        best_action = Action(
+            kind="move",
+            attacker_unit_id=mover.unit_id,
+            move_type="remain_stationary",
+            destination=mover.position,
+        )
+
+        legal_types = state.legal_move_types(mover)
+        for mt in legal_types:
+            if mt == "remain_stationary":
+                continue
+            dests = state.legal_destinations(mover, mt)
+            for dest in dests:
+                s = score_move(dest, mt)
+                if s > best_score:
+                    best_score = s
+                    best_action = Action(
+                        kind="move",
+                        attacker_unit_id=mover.unit_id,
+                        move_type=mt,
+                        destination=dest,
+                    )
+        return best_action
 
     def _best(
         self,
@@ -93,7 +179,6 @@ class HeuristicStrategy:
                 )
         if best is None:
             raise RuntimeError(
-                f"no legal {kind} available — the engine should not have asked "
-                f"for an action"
+                f"no legal {kind} available — the engine should not have asked for an action"
             )
         return best

@@ -66,9 +66,7 @@ def _base() -> dict:
                 ],
             },
         },
-        "turns": [
-            {"phase": "shooting", "active_side": "attacker", "narrate_before": "Fire."}
-        ],
+        "turns": [{"phase": "shooting", "active_side": "attacker", "narrate_before": "Fire."}],
         "outro": "An outro.",
     }
 
@@ -141,7 +139,7 @@ class TestValidScenario:
 
 
 class TestPackagedScenarios:
-    def test_all_nine_scenarios_are_listed(self) -> None:
+    def test_all_ten_scenarios_are_listed(self) -> None:
         assert [s.scenario_id for s in available_scenarios()] == [
             "01_first_shots",
             "02_tougher_targets",
@@ -152,6 +150,7 @@ class TestPackagedScenarios:
             "07_devastating_wounds",
             "08_first_blood",
             "09_pick_your_fights",
+            "10_position_and_fire",
         ]
 
     def test_pick_your_fights_is_two_disjoint_combats_vs_the_ai(self) -> None:
@@ -308,9 +307,7 @@ class TestMalformedScenario:
     def test_position_off_grid(self, tmp_path: Path) -> None:
         data = _base()
         data["sides"]["attacker"]["units"][0]["position"] = [BATTLEFIELD_WIDTH, 4]
-        with pytest.raises(
-            ScenarioDataError, match=f"{BATTLEFIELD_WIDTH}x{BATTLEFIELD_HEIGHT}"
-        ):
+        with pytest.raises(ScenarioDataError, match=f"{BATTLEFIELD_WIDTH}x{BATTLEFIELD_HEIGHT}"):
             _load(tmp_path, data)
 
     def test_position_malformed(self, tmp_path: Path) -> None:
@@ -339,8 +336,8 @@ class TestMalformedScenario:
 
     def test_unsupported_phase_mentions_v1_scope(self, tmp_path: Path) -> None:
         data = _base()
-        data["turns"][0]["phase"] = "movement"
-        with pytest.raises(ScenarioDataError, match=r"movement.*v1"):
+        data["turns"][0]["phase"] = "charge"
+        with pytest.raises(ScenarioDataError, match=r"charge.*Scope discipline"):
             _load(tmp_path, data)
 
     def test_bad_active_side(self, tmp_path: Path) -> None:
@@ -412,9 +409,7 @@ def _with_necron_attacker(data: dict) -> dict:
     """Swap the attacker for Immortals, who carry two ranged guns."""
     data["sides"]["attacker"] = {
         "faction": "necrons",
-        "units": [
-            {"id": "immortals_1", "datasheet": "immortals", "position": [3, 4], "models": 5}
-        ],
+        "units": [{"id": "immortals_1", "datasheet": "immortals", "position": [3, 4], "models": 5}],
     }
     return data
 
@@ -463,9 +458,7 @@ class TestLoadoutOverride:
         with pytest.raises(ScenarioDataError, match=r"not\s+carrying.*tesla_carbine"):
             _load(tmp_path, data)
 
-    def test_scripted_action_outside_the_default_loadout_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_scripted_action_outside_the_default_loadout_rejected(self, tmp_path: Path) -> None:
         # No override: Immortals default to the gauss blaster, so a script
         # firing the tesla carbine is an authoring inconsistency.
         data = _with_necron_attacker(_base())
@@ -505,9 +498,7 @@ class TestOpponentStrategy:
         with pytest.raises(ScenarioDataError, match="opponent_strategy"):
             _load(tmp_path, data)
 
-    def test_heuristic_rejects_scripted_actions_for_the_opponent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_heuristic_rejects_scripted_actions_for_the_opponent(self, tmp_path: Path) -> None:
         data = _base()
         data["opponent_strategy"] = "heuristic"
         data["turns"].append(
@@ -554,10 +545,10 @@ class TestDistanceModel:
         ("a", "b", "squares"),
         [
             ((0, 0), (0, 0), 0),
-            ((3, 4), (9, 4), 6),    # scenario 01's shot: 6 squares = 12"
-            ((2, 4), (9, 2), 7),    # diagonal-ish: the larger axis rules
+            ((3, 4), (9, 4), 6),  # scenario 01's shot: 6 squares = 12"
+            ((2, 4), (9, 2), 7),  # diagonal-ish: the larger axis rules
             ((0, 0), (11, 7), 11),  # the grid's corner-to-corner maximum
-            ((4, 4), (5, 5), 1),    # diagonal neighbour is ONE king's move
+            ((4, 4), (5, 5), 1),  # diagonal neighbour is ONE king's move
         ],
     )
     def test_chebyshev_and_inches(
@@ -570,11 +561,11 @@ class TestDistanceModel:
     @pytest.mark.parametrize(
         ("inches", "squares"),
         [
-            (2, 1),    # engagement range: adjacency
-            (3, 1),    # floors — an odd reach never gains a square
-            (9, 4),    # a 9" pistol reaches 8", not 10"
+            (2, 1),  # engagement range: adjacency
+            (3, 1),  # floors — an odd reach never gains a square
+            (9, 4),  # a 9" pistol reaches 8", not 10"
             (12, 6),
-            (18, 9),   # shoota / fleshborer
+            (18, 9),  # shoota / fleshborer
             (24, 12),  # bolt rifle covers the whole 12x8 grid
             (30, 15),
         ],
@@ -585,7 +576,7 @@ class TestDistanceModel:
     def test_weapon_range_boundary(self) -> None:
         sheet = load_scenario_by_id("01_first_shots").defender.units[0].datasheet
         fleshborer = next(w for w in sheet.weapons if w.name == "fleshborer")  # 18"
-        assert in_weapon_range((0, 4), (9, 4), fleshborer)       # 9 squares = 18": exactly in
+        assert in_weapon_range((0, 4), (9, 4), fleshborer)  # 9 squares = 18": exactly in
         assert not in_weapon_range((0, 4), (10, 4), fleshborer)  # 10 squares = 20": out
 
     def test_engagement_is_the_two_inch_reach(self) -> None:
@@ -593,21 +584,19 @@ class TestDistanceModel:
         for dx in range(-3, 4):
             for dy in range(-3, 4):
                 a, b = (5, 4), (5 + dx, 4 + dy)
-                assert in_engagement_range(a, b) == (
-                    distance_inches(a, b) <= 2
-                )
+                assert in_engagement_range(a, b) == (distance_inches(a, b) <= 2)
 
 
 class TestEngagementGeometry:
     @pytest.mark.parametrize(
         ("a", "b", "engaged"),
         [
-            ((4, 4), (5, 4), True),   # orthogonal neighbour
-            ((4, 4), (5, 5), True),   # diagonal neighbour
+            ((4, 4), (5, 4), True),  # orthogonal neighbour
+            ((4, 4), (5, 5), True),  # diagonal neighbour
             ((4, 4), (4, 3), True),
             ((4, 4), (6, 4), False),  # one square of daylight
             ((4, 4), (6, 6), False),
-            ((4, 4), (4, 4), True),   # same square (placement forbids it anyway)
+            ((4, 4), (4, 4), True),  # same square (placement forbids it anyway)
         ],
     )
     def test_adjacency_is_engagement(

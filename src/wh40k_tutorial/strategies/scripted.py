@@ -43,23 +43,42 @@ class ScriptedStrategy:
 def scripted_actions_for(scenario: Scenario, side: str) -> tuple[Action, ...]:
     """Flatten one side's scripted actions across the scenario's turns, in play order.
 
-    A shooting turn's actions belong to its active side. A fight turn is
+    A shooting or movement turn's actions belong to its active side. A fight turn is
     two-sided, so a fight action belongs to whichever side its acting unit
     is on — the loader guarantees that is never the player's side.
     """
     side_units = {u.unit_id for u in scenario.side(side).units}
-    return tuple(
-        Action(
-            kind="fight" if turn.phase == "fight" else "shoot",
-            attacker_unit_id=a.attacker_unit_id,
-            weapon_key=a.weapon,
-            target_unit_id=a.target_unit_id,
-        )
-        for turn in scenario.turns
-        for a in turn.actions
-        if (
-            a.attacker_unit_id in side_units
-            if turn.phase == "fight"
-            else turn.active_side == side
-        )
-    )
+    actions: list[Action] = []
+    for turn in scenario.turns:
+        for a in turn.actions:
+            if turn.phase == "fight":
+                if a.attacker_unit_id in side_units:
+                    actions.append(
+                        Action(
+                            kind="fight",
+                            attacker_unit_id=a.attacker_unit_id,
+                            weapon_key=a.weapon,
+                            target_unit_id=a.target_unit_id,
+                        )
+                    )
+            elif turn.phase == "movement":
+                if turn.active_side == side:
+                    actions.append(
+                        Action(
+                            kind="move",
+                            attacker_unit_id=a.attacker_unit_id,
+                            move_type=a.move_type,
+                            destination=a.destination,
+                        )
+                    )
+            else:
+                if turn.active_side == side:
+                    actions.append(
+                        Action(
+                            kind="shoot",
+                            attacker_unit_id=a.attacker_unit_id,
+                            weapon_key=a.weapon,
+                            target_unit_id=a.target_unit_id,
+                        )
+                    )
+    return tuple(actions)
