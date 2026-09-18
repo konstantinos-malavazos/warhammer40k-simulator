@@ -1,0 +1,50 @@
+{
+  "id": "10_position_and_fire",
+  "title": "Position and Fire",
+  "teaches": "the movement phase: closing the distance with a Normal Move to bring weapons into range, and the shoot-eligibility cost of Advancing (Core Rule 10.04).",
+  "player_side": "attacker",
+  "opponent_strategy": "heuristic",
+  "intro": "Weapons only kill what they can reach. Across the plaza, five Space Marine Intercessors hold the line. You command a brood of ten Tyranid Termagants armed with fleshborers. At 20\" separation (10 squares), your 18\" guns cannot touch them. Before you can shoot, you must move. In the Movement phase, you choose a move type for your brood: Remain Stationary (stay put), a Normal Move (up to your 6\" Movement, ending unengaged), or an Advance (roll 1D6 extra inches, but Core Rule 10.04 forbids shooting afterwards). Step forward with a Normal Move to bring the Marines into range, and let loose.",
+  "sides": {
+    "attacker": {
+      "faction": "tyranids",
+      "units": [
+        {
+          "id": "termagants_1",
+          "datasheet": "termagants",
+          "position": [1, 3],
+          "models": 10
+        }
+      ]
+    },
+    "defender": {
+      "faction": "space_marines",
+      "units": [
+        {
+          "id": "intercessors_1",
+          "datasheet": "intercessor_squad",
+          "position": [11, 3],
+          "models": 5
+        }
+      ]
+    }
+  },
+  "turns": [
+    {
+      "phase": "movement",
+      "active_side": "attacker",
+      "narrate_before": "Your movement phase. At 20\" away (10 squares), your fleshborers cannot reach the Marines (range 18\" = 9 squares). Make a Normal Move forward to close the gap into firing range — but do not Advance, or rule 10.04 will leave your brood unable to shoot."
+    },
+    {
+      "phase": "shooting",
+      "active_side": "attacker",
+      "narrate_before": "Your shooting phase. Because you made a Normal Move instead of Advancing, your brood is steady and eligible to fire. Pick the fleshborer and light up the squad."
+    },
+    {
+      "phase": "shooting",
+      "active_side": "defender",
+      "narrate_before": "The surviving Marines answer with their bolt rifles. With a 24\" range, their guns have no trouble reaching back."
+    }
+  ],
+  "outro": "That was the Movement phase in action. You closed from 20\" to 16\", turning an impossible shot into ten living projectiles. Notice the discipline: an Advance would have carried your gaunts further, but 10.04 would have silenced them for the turn. Movement is not just running across the board — it is positioning your guns for the phase that follows."
+}

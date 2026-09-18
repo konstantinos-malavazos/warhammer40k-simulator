@@ -28,3 +28,8 @@ env/
 
 # Claude Code agent memory (machine-local, not shared)
 .claude/agent-memory-local/
+.claude/handoffs/
+
+# AI tooling and local assistant state
+.serena/
+.claude/
